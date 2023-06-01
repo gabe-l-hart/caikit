@@ -18,5 +18,4 @@ classes
 
 # Local
 from .base import DataModelBackendBase
-
-# from .dict_backend import DictBackend
+from .dict_backend import DictBackend
