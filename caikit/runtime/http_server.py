@@ -13,11 +13,11 @@
 # limitations under the License.
 
 # Standard
+from dataclasses import dataclass
 from functools import partial
-
-# Standardfrom functools import partial
-from typing import Iterable, Optional, Type, Union, get_args, get_origin
+from typing import Any, ClassVar, Iterable, Optional, Type, Union, get_args, get_origin
 import asyncio
+import base64
 import json
 import re
 import ssl
@@ -26,6 +26,9 @@ import ssl
 from fastapi import FastAPI, Request, Response
 from grpc import StatusCode
 from sse_starlette import EventSourceResponse, ServerSentEvent
+from starlette.datastructures import MutableHeaders
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.types import Receive
 import numpy as np
 import pydantic
 import uvicorn
@@ -97,9 +100,15 @@ class RuntimeHTTPServer(RuntimeServerBase):
         )
         self.global_predict_servicer = GlobalPredictServicer(inference_service)
         self.package_name = inference_service.descriptor.full_name.rsplit(".", 1)[0]
+        self.route_prefix = self.config.runtime.http.route_prefix
+        if self.route_prefix[0] != "/":
+            self.route_prefix = "/" + self.route_prefix
 
         # Bind all routes to the server
         self._bind_routes(inference_service)
+
+        # Bind server middleware
+        self._bind_middleware()
 
     def start(self):
         """Start the server (blocking)"""
@@ -140,6 +149,11 @@ class RuntimeHTTPServer(RuntimeServerBase):
                 self._add_unary_stream_handler(rpc)
             else:
                 self._add_unary_unary_handler(rpc)
+
+    def _bind_middleware(self):
+        self.app.add_middleware(
+            RawRequestBodyMiddleware, api_route_prefix=self.route_prefix
+        )
 
     def _add_unary_unary_handler(self, rpc: CaikitRPCBase):
         """Add a unary:unary request handler for this RPC signature"""
@@ -242,11 +256,7 @@ class RuntimeHTTPServer(RuntimeServerBase):
                 "-",
                 re.sub("Task$", "", re.sub("Predict$", "", rpc.name)),
             ).lower()
-            route = "/".join(
-                [self.config.runtime.http.route_prefix, "{model_id}", "task", task_name]
-            )
-            if route[0] != "/":
-                route = "/" + route
+            route = "/".join([self.route_prefix, "{model_id}", "task", task_name])
             return route
         raise NotImplementedError("No support for train rpcs yet!")
 
@@ -317,6 +327,124 @@ class RuntimeHTTPServer(RuntimeServerBase):
         )
         PYDANTIC_REGISTRY[dm_class] = pydantic_model
         return pydantic_model
+
+
+## Helpers #####################################################################
+
+
+@dataclass
+class ReceiveProxy:
+    """Proxy to starlette.types.Receive.__call__ with caching first receive call.
+
+    CITE: https://github.com/tiangolo/fastapi/discussions/8187#discussioncomment-5148059
+    """
+
+    receive: Receive
+    cached_body: bytes
+    _is_first_call: ClassVar[bool] = True
+
+    async def __call__(self):
+        # First call will be for getting request body => returns cached result
+        if self._is_first_call:
+            self._is_first_call = False
+            return {
+                "type": "http.request",
+                "body": self.cached_body,
+                "more_body": False,
+            }
+
+        return await self.receive()
+
+
+class RequestWrapper(Request):
+    """This class wraps a Request so that middleware can effectively mutate a
+    request without needing to monkey around with the underlying request itself
+    """
+
+    def __init__(
+        self,
+        wrapped_request: Request,
+        prefilled_body: bytes,
+        prefilled_json: dict,
+        header_overrides: MutableHeaders,
+    ):
+        # NOTE: Intentionally not calling super().__init__ since this is a proxy
+        #   to an already-initialized request
+
+        # Explicit names that match Request
+        self._body = prefilled_body
+        self._receive = ReceiveProxy(wrapped_request._receive, prefilled_body)
+
+        # Attrs that will be used for overloaded functions
+        self._request = wrapped_request
+        self._prefilled_json = prefilled_json
+        self._headers = header_overrides
+
+    @property
+    def headers(self) -> MutableHeaders:
+        # DEBUG
+        breakpoint()
+        return self._headers
+
+    async def json(self) -> dict:
+        return self._prefilled_json
+
+    def __getattr__(self, name: str) -> Any:
+        """Forward all other attributes to the wrapped request"""
+        # DEBUG
+        print(f"__getattr__({name})")
+        return getattr(self._request, name)
+
+
+class RawRequestBodyMiddleware(BaseHTTPMiddleware):
+    def __init__(self, api_route_prefix: str, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.api_route_prefix = api_route_prefix
+
+    async def dispatch(self, request, call_next):
+        # If not an API route, ignore it
+        if not request.url.path.startswith(self.api_route_prefix):
+            return await call_next(request)
+
+        mimetype = request.headers.get("content-type")
+        # If the request is explicitly json, pass it along unaltered
+        if mimetype == "application/json":
+            return await call_next(request)
+
+        # If the request is raw text, see if it is already json formatted and if
+        # not, coerce it into a json object
+        if mimetype.startswith("application") or mimetype == "text/plain":
+            try:
+                await request.json()
+                log.debug2("Valid JSON")
+            except json.decoder.JSONDecodeError:
+                body = await request.body()
+                # If the body is valid utf8, leave it as is
+                try:
+                    inputs_str = body.decode("utf-8")
+                    log.debug2("Valid utf-8 string")
+                except UnicodeDecodeError:
+                    log.debug2("Base64 encoding bytes")
+                    inputs_str = base64.encodebytes(body).decode("utf-8")
+                updated_json = {"inputs": inputs_str}
+                updated_body = json.dumps(updated_json).encode("utf-8")
+                # headers = request.headers.mutablecopy()
+                # headers["content-type"] = "application/json"
+                # request = RequestWrapper(request, updated_body, updated_json, headers)
+                request._receive = ReceiveProxy(
+                    receive=request.receive, cached_body=updated_body
+                )
+                request._body = updated_body
+                idx = [
+                    i
+                    for i, (key, _) in enumerate(request.headers._list)
+                    if key == b"content-type"
+                ][0]
+                request.headers._list[idx] = (b"content-type", b"application/json")
+
+                # #DEBUG
+                # breakpoint()
+        return await call_next(request)
 
 
 ## Main ########################################################################
