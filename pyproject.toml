@@ -97,3 +97,29 @@ Source = "https://github.com/caikit/caikit"
 markers = [
     "examples: marks tests as e2e examples (deselect with '-m \"not examples\"')",
 ]
+
+[tool.ruff]
+line-length = 100
+select = ["F", "E", "I"]
+ignore = [
+    # Remove if/when we remove star imports
+    "F403",
+    "F405",
+]
+
+[tools.ruff.isort]
+known-first-party = [
+    "alog",
+    "aconfig",
+    "py_to_proto",
+    "import_tracker",
+]
+known-local-folder = [
+    "caikit",
+    "sample_lib",
+    "tests",
+    "text_sentiment",
+]
+
+[tool.ruff.per-file-ignores]
+"__init__.py" = ["E402", "F401"]

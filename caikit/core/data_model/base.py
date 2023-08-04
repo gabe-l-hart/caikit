@@ -515,7 +515,7 @@ class DataBase(metaclass=_DataBaseMetaClass):
         return instance
 
     @property
-    def backend(self) -> Optional["DataModelBackendBase"]:
+    def backend(self) -> Optional["DataModelBackendBase"]:  # noqa: F821
         return getattr(self, _DataBaseMetaClass._BACKEND_ATTR, None)
 
     def which_oneof(self, oneof_name: str) -> Optional[str]:
@@ -847,7 +847,7 @@ class DataBase(metaclass=_DataBaseMetaClass):
         fields_to_dict = []
         for field in self.fields:
             if (
-                not field in self._fields_to_oneof
+                field not in self._fields_to_oneof
                 or self.which_oneof(self._fields_to_oneof[field]) == field
             ):
                 fields_to_dict.append(field)

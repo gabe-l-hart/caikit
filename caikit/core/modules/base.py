@@ -85,7 +85,7 @@ class ModuleBase(metaclass=_ModuleBaseMeta):
     @classmethod
     def get_inference_signature(
         cls, input_streaming: bool, output_streaming: bool
-    ) -> Optional["caikit.core.signature_parsing.CaikitMethodSignature"]:
+    ) -> Optional["CaikitMethodSignature"]:
         """Returns the inference method signature that is capable of running the module's task
         for the given flavors of input and output streaming
         """
@@ -342,12 +342,10 @@ class ModuleBase(metaclass=_ModuleBaseMeta):
         time_passed = time.time() - start_time
 
         # stop on seconds or iterations depending on input arguments
-        # pylint: disable=unnecessary-lambda-assignment
-        continue_condition = (
-            lambda t_p, i_p: t_p <= num_seconds if num_seconds else i_p < num_iterations
-        )
-        response = None
+        def continue_condition(t_p, i_p):
+            return t_p <= num_seconds if num_seconds else i_p < num_iterations
 
+        response = None
         while continue_condition(time_passed, iterations_passed):
             # use model's run method
             response = self.run(*args, **kwargs)

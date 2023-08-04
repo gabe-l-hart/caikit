@@ -211,7 +211,8 @@ class RuntimeHTTPServer(RuntimeServerBase):
             if rpc_info["client_streaming"]:
                 # Skipping the binding of this route since we don't have support
                 log.info(
-                    "No support for input streaming on REST Server yet! Skipping this rpc %s with input type %s",
+                    "No support for input streaming on REST Server yet! Skipping "
+                    + "this rpc %s with input type %s",
                     rpc_info["name"],
                     rpc_info["input_type"],
                 )
