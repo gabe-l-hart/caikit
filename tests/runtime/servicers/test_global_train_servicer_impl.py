@@ -307,6 +307,40 @@ def test_run_train_job_works_with_wait(
         )
 
 
+def test_local_trainer_output_dir(sample_train_service):
+    """Make sure that a local path can be given to save the output"""
+    stream_type = caikit.interfaces.common.data_model.DataStreamSourceSampleTrainingType
+    with TemporaryDirectory() as tmp_dir:
+        output_dir = os.path.join(tmp_dir, "output_dir")
+        training_data = stream_type(
+            jsondata=stream_type.JsonData(data=[SampleTrainingType(1)])
+        ).to_proto()
+        train_request = sample_train_service.messages.SampleTaskSampleModuleTrainRequest(
+            model_name=random_test_id(),
+            output_dir=output_dir,
+            parameters=sample_train_service.messages.SampleTaskSampleModuleTrainParameters(
+                batch_size=42,
+                training_data=training_data,
+            ),
+        )
+        servicer = GlobalTrainServicer(training_service=sample_train_service)
+        training_response = servicer.run_training_job(
+            train_request,
+            SampleModule,
+            training_output_dir=tmp_dir,
+            context=Fixtures.build_context("foo"),
+            wait=True,
+        )
+        assert os.path.isdir(output_dir)
+        model_dir = os.path.join(
+            output_dir,
+            training_response.training_id,
+            training_response.model_name,
+        )
+        loaded_model = caikit.load(model_dir)
+        assert loaded_model
+
+
 #############
 # Error cases
 #############
@@ -402,11 +436,10 @@ def test_local_trainer_rejects_s3_output_paths(
     ).to_proto()
     train_request = sample_train_service.messages.SampleTaskSampleModuleTrainRequest(
         model_name=random_test_id(),
-        output_path=S3Path(path="foo").to_proto(),
+        output_s3=S3Path(path="foo").to_proto(),
         parameters=sample_train_service.messages.SampleTaskSampleModuleTrainParameters(
             batch_size=42,
             training_data=training_data,
-            oom_exit=True,
         ),
     )
 

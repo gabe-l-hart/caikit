@@ -26,6 +26,7 @@ import typing
 from py_to_proto.dataclass_to_proto import (  # NOTE: Imported from here for compatibility
     Annotated,
     FieldNumber,
+    OneofField,
 )
 import alog
 
@@ -111,7 +112,14 @@ class ModuleClassTrainRPC(CaikitRPCBase):
             self._method.default_parameters,
         )
 
-        params = {"model_name": str, "output_path": S3Path, "parameters": "PLACEHOLDER"}
+        params = {
+            "model_name": str,
+            "output_path": Union[
+                Annotated[str, OneofField("output_dir")],
+                Annotated[S3Path, OneofField("output_s3")],
+            ],
+            "parameters": "PLACEHOLDER",
+        }
 
         self._req = _RequestMessage(
             ModuleClassTrainRPC.module_class_to_req_name(self.clz),
@@ -387,7 +395,7 @@ class _RequestMessage:
         else:
             last_used_number = 0
 
-        for _, (item_name, typ) in enumerate(params.items()):
+        for item_name, typ in params.items():
             if item_name in existing_fields:
                 # if field existed previously, get the original number from there
                 num = existing_fields[item_name]
